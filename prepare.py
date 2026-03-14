@@ -1,389 +1,643 @@
 """
-One-time data preparation for autoresearch experiments.
-Downloads data shards and trains a BPE tokenizer.
-
+prepare.py 
+---------------
+Fixed data preparation for VA-MR classification fine-tuning via AutoResearch.
+ 
+This replaces the language modeling prepare.py for the classification task.
+It loads the validated labeled dataset from the Qualitative Research Algorithm
+pipeline and provides a fixed evaluation function for the AutoResearch
+experiment loop.
+ 
+CONSTANTS (do NOT modify):
+    NUM_CLASSES = 4       (Vigilance, Avoidance, Metacognition, Reappraisal)
+    MAX_SEQ_LEN = 512     (ClinicalBERT max sequence length)
+    TIME_BUDGET = 300     (5 minutes per experiment)
+    VAL_SPLIT   = 0.15
+    TEST_SPLIT  = 0.15
+    RANDOM_SEED = 42
+ 
 Usage:
-    python prepare.py                  # full prep (download + tokenizer)
-    python prepare.py --num-shards 8   # download only 8 shards (for testing)
-
-Data and tokenizer are stored in ~/.cache/autoresearch/.
+    python prepare_vamr.py --dataset /path/to/master_segments.csv
 """
-
+ 
 import os
 import sys
-import time
-import math
+import json
 import argparse
-import pickle
-from multiprocessing import Pool
-
-import requests
-import pyarrow.parquet as pq
-import rustbpe
-import tiktoken
+import numpy as np
+import pandas as pd
 import torch
-
+from torch.utils.data import Dataset, DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score, cohen_kappa_score, confusion_matrix
+from transformers import AutoTokenizer
+ 
 # ---------------------------------------------------------------------------
 # Constants (fixed, do not modify)
 # ---------------------------------------------------------------------------
-
-MAX_SEQ_LEN = 2048       # context length
-TIME_BUDGET = 300        # training time budget in seconds (5 minutes)
-EVAL_TOKENS = 40 * 524288  # number of tokens for val eval
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch")
+ 
+NUM_CLASSES = 4
+MAX_SEQ_LEN = 512
+TIME_BUDGET = 300          # seconds (5 minutes)
+VAL_SPLIT = 0.15
+TEST_SPLIT = 0.15
+RANDOM_SEED = 42
+MIN_PER_CLASS_F1 = 0.25    # floor for per-class F1 in keep/discard decisions
+ 
+STAGE_NAMES = ['Vigilance', 'Avoidance', 'Metacognition', 'Reappraisal']
+ 
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch_vamr")
 DATA_DIR = os.path.join(CACHE_DIR, "data")
-TOKENIZER_DIR = os.path.join(CACHE_DIR, "tokenizer")
-BASE_URL = "https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle/resolve/main"
-MAX_SHARD = 6542 # the last datashard is shard_06542.parquet
-VAL_SHARD = MAX_SHARD  # pinned validation shard (shard_06542)
-VAL_FILENAME = f"shard_{VAL_SHARD:05d}.parquet"
-VOCAB_SIZE = 8192
-
-# BPE split pattern (GPT-4 style, with \p{N}{1,2} instead of {1,3})
-SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,2}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
-
-SPECIAL_TOKENS = [f"<|reserved_{i}|>" for i in range(4)]
-BOS_TOKEN = "<|reserved_0|>"
-
+ 
 # ---------------------------------------------------------------------------
-# Data download
+# Dataset loading
 # ---------------------------------------------------------------------------
-
-def download_single_shard(index):
-    """Download one parquet shard with retries. Returns True on success."""
-    filename = f"shard_{index:05d}.parquet"
-    filepath = os.path.join(DATA_DIR, filename)
-    if os.path.exists(filepath):
-        return True
-
-    url = f"{BASE_URL}/{filename}"
-    max_attempts = 5
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = requests.get(url, stream=True, timeout=30)
-            response.raise_for_status()
-            temp_path = filepath + ".tmp"
-            with open(temp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-            os.rename(temp_path, filepath)
-            print(f"  Downloaded {filename}")
-            return True
-        except (requests.RequestException, IOError) as e:
-            print(f"  Attempt {attempt}/{max_attempts} failed for {filename}: {e}")
-            for path in [filepath + ".tmp", filepath]:
-                if os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-            if attempt < max_attempts:
-                time.sleep(2 ** attempt)
-    return False
-
-
-def download_data(num_shards, download_workers=8):
-    """Download training shards + pinned validation shard."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    num_train = min(num_shards, MAX_SHARD)
-    ids = list(range(num_train))
-    if VAL_SHARD not in ids:
-        ids.append(VAL_SHARD)
-
-    # Count what's already downloaded
-    existing = sum(1 for i in ids if os.path.exists(os.path.join(DATA_DIR, f"shard_{i:05d}.parquet")))
-    if existing == len(ids):
-        print(f"Data: all {len(ids)} shards already downloaded at {DATA_DIR}")
-        return
-
-    needed = len(ids) - existing
-    print(f"Data: downloading {needed} shards ({existing} already exist)...")
-
-    workers = max(1, min(download_workers, needed))
-    with Pool(processes=workers) as pool:
-        results = pool.map(download_single_shard, ids)
-
-    ok = sum(1 for r in results if r)
-    print(f"Data: {ok}/{len(ids)} shards ready at {DATA_DIR}")
-
-# ---------------------------------------------------------------------------
-# Tokenizer training
-# ---------------------------------------------------------------------------
-
-def list_parquet_files():
-    """Return sorted list of parquet file paths in the data directory."""
-    files = sorted(f for f in os.listdir(DATA_DIR) if f.endswith(".parquet") and not f.endswith(".tmp"))
-    return [os.path.join(DATA_DIR, f) for f in files]
-
-
-def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
-    """Yield documents from training split (all shards except pinned val shard)."""
-    parquet_paths = [p for p in list_parquet_files() if not p.endswith(VAL_FILENAME)]
-    nchars = 0
-    for filepath in parquet_paths:
-        pf = pq.ParquetFile(filepath)
-        for rg_idx in range(pf.num_row_groups):
-            rg = pf.read_row_group(rg_idx)
-            for text in rg.column("text").to_pylist():
-                doc = text[:doc_cap] if len(text) > doc_cap else text
-                nchars += len(doc)
-                yield doc
-                if nchars >= max_chars:
-                    return
-
-
-def train_tokenizer():
-    """Train BPE tokenizer using rustbpe, save as tiktoken pickle."""
-    tokenizer_pkl = os.path.join(TOKENIZER_DIR, "tokenizer.pkl")
-    token_bytes_path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
-
-    if os.path.exists(tokenizer_pkl) and os.path.exists(token_bytes_path):
-        print(f"Tokenizer: already trained at {TOKENIZER_DIR}")
-        return
-
-    os.makedirs(TOKENIZER_DIR, exist_ok=True)
-
-    parquet_files = list_parquet_files()
-    if len(parquet_files) < 2:
-        print("Tokenizer: need at least 2 data shards (1 train + 1 val). Download more data first.")
-        sys.exit(1)
-
-    # --- Train with rustbpe ---
-    print("Tokenizer: training BPE tokenizer...")
-    t0 = time.time()
-
-    tokenizer = rustbpe.Tokenizer()
-    vocab_size_no_special = VOCAB_SIZE - len(SPECIAL_TOKENS)
-    tokenizer.train_from_iterator(text_iterator(), vocab_size_no_special, pattern=SPLIT_PATTERN)
-
-    # Build tiktoken encoding from trained merges
-    pattern = tokenizer.get_pattern()
-    mergeable_ranks = {bytes(k): v for k, v in tokenizer.get_mergeable_ranks()}
-    tokens_offset = len(mergeable_ranks)
-    special_tokens = {name: tokens_offset + i for i, name in enumerate(SPECIAL_TOKENS)}
-    enc = tiktoken.Encoding(
-        name="rustbpe",
-        pat_str=pattern,
-        mergeable_ranks=mergeable_ranks,
-        special_tokens=special_tokens,
-    )
-
-    # Save tokenizer
-    with open(tokenizer_pkl, "wb") as f:
-        pickle.dump(enc, f)
-
-    t1 = time.time()
-    print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_pkl}")
-
-    # --- Build token_bytes lookup for BPB evaluation ---
-    print("Tokenizer: building token_bytes lookup...")
-    special_set = set(SPECIAL_TOKENS)
-    token_bytes_list = []
-    for token_id in range(enc.n_vocab):
-        token_str = enc.decode([token_id])
-        if token_str in special_set:
-            token_bytes_list.append(0)
-        else:
-            token_bytes_list.append(len(token_str.encode("utf-8")))
-    token_bytes_tensor = torch.tensor(token_bytes_list, dtype=torch.int32)
-    torch.save(token_bytes_tensor, token_bytes_path)
-    print(f"Tokenizer: saved token_bytes to {token_bytes_path}")
-
-    # Sanity check
-    test = "Hello world! Numbers: 123. Unicode: 你好"
-    encoded = enc.encode_ordinary(test)
-    decoded = enc.decode(encoded)
-    assert decoded == test, f"Tokenizer roundtrip failed: {test!r} -> {decoded!r}"
-    print(f"Tokenizer: sanity check passed (vocab_size={enc.n_vocab})")
-
-# ---------------------------------------------------------------------------
-# Runtime utilities (imported by train.py)
-# ---------------------------------------------------------------------------
-
-class Tokenizer:
-    """Minimal tokenizer wrapper. Training is handled above."""
-
-    def __init__(self, enc):
-        self.enc = enc
-        self.bos_token_id = enc.encode_single_token(BOS_TOKEN)
-
-    @classmethod
-    def from_directory(cls, tokenizer_dir=TOKENIZER_DIR):
-        with open(os.path.join(tokenizer_dir, "tokenizer.pkl"), "rb") as f:
-            enc = pickle.load(f)
-        return cls(enc)
-
-    def get_vocab_size(self):
-        return self.enc.n_vocab
-
-    def get_bos_token_id(self):
-        return self.bos_token_id
-
-    def encode(self, text, prepend=None, num_threads=8):
-        if prepend is not None:
-            prepend_id = prepend if isinstance(prepend, int) else self.enc.encode_single_token(prepend)
-        if isinstance(text, str):
-            ids = self.enc.encode_ordinary(text)
-            if prepend is not None:
-                ids.insert(0, prepend_id)
-        elif isinstance(text, list):
-            ids = self.enc.encode_ordinary_batch(text, num_threads=num_threads)
-            if prepend is not None:
-                for row in ids:
-                    row.insert(0, prepend_id)
-        else:
-            raise ValueError(f"Invalid input type: {type(text)}")
-        return ids
-
-    def decode(self, ids):
-        return self.enc.decode(ids)
-
-
-def get_token_bytes(device="cpu"):
-    path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
-    with open(path, "rb") as f:
-        return torch.load(f, map_location=device)
-
-
-def _document_batches(split, tokenizer_batch_size=128):
-    """Infinite iterator over document batches from parquet files."""
-    parquet_paths = list_parquet_files()
-    assert len(parquet_paths) > 0, "No parquet files found. Run prepare.py first."
-    val_path = os.path.join(DATA_DIR, VAL_FILENAME)
-    if split == "train":
-        parquet_paths = [p for p in parquet_paths if p != val_path]
-        assert len(parquet_paths) > 0, "No training shards found."
+ 
+def load_labeled_dataset(dataset_path: str) -> pd.DataFrame:
+    """
+    Load the master segment dataset produced by the VA-MR labeling pipeline.
+ 
+    Filters to participant segments with valid final_label.
+    """
+    if dataset_path.endswith('.jsonl'):
+        df = pd.read_json(dataset_path, lines=True)
+    elif dataset_path.endswith('.csv'):
+        df = pd.read_csv(dataset_path)
     else:
-        parquet_paths = [val_path]
-    epoch = 1
-    while True:
-        for filepath in parquet_paths:
-            pf = pq.ParquetFile(filepath)
-            for rg_idx in range(pf.num_row_groups):
-                rg = pf.read_row_group(rg_idx)
-                batch = rg.column('text').to_pylist()
-                for i in range(0, len(batch), tokenizer_batch_size):
-                    yield batch[i:i+tokenizer_batch_size], epoch
-        epoch += 1
-
-
-def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
+        raise ValueError(f"Unsupported format: {dataset_path}")
+ 
+    # Filter to participant segments with labels
+    df = df[
+        (df['speaker'] == 'participant')
+        & (df['final_label'].notna())
+    ].copy()
+    df['final_label'] = df['final_label'].astype(int)
+ 
+    print(f"Loaded {len(df)} labeled participant segments")
+    print(f"Label distribution:\n{df['final_label'].value_counts().sort_index()}")
+ 
+    return df
+ 
+ 
+def make_stratified_splits(
+    df: pd.DataFrame,
+) -> tuple:
     """
-    BOS-aligned dataloader with best-fit packing.
-    Every row starts with BOS. Documents packed using best-fit to minimize cropping.
-    When no document fits remaining space, crops shortest doc to fill exactly.
-    100% utilization (no padding).
+    Construct stratified train/val/test splits using trial_id and final_label.
+ 
+    Ensures each split has proportional representation of all four stages
+    AND all four trials.
     """
-    assert split in ["train", "val"]
-    row_capacity = T + 1
-    batches = _document_batches(split)
-    bos_token = tokenizer.get_bos_token_id()
-    doc_buffer = []
-    epoch = 1
-
-    def refill_buffer():
-        nonlocal epoch
-        doc_batch, epoch = next(batches)
-        token_lists = tokenizer.encode(doc_batch, prepend=bos_token)
-        doc_buffer.extend(token_lists)
-
-    # Pre-allocate buffers: [inputs (B*T) | targets (B*T)]
-    row_buffer = torch.empty((B, row_capacity), dtype=torch.long)
-    cpu_buffer = torch.empty(2 * B * T, dtype=torch.long, pin_memory=True)
-    gpu_buffer = torch.empty(2 * B * T, dtype=torch.long, device="cuda")
-    cpu_inputs = cpu_buffer[:B * T].view(B, T)
-    cpu_targets = cpu_buffer[B * T:].view(B, T)
-    inputs = gpu_buffer[:B * T].view(B, T)
-    targets = gpu_buffer[B * T:].view(B, T)
-
-    while True:
-        for row_idx in range(B):
-            pos = 0
-            while pos < row_capacity:
-                while len(doc_buffer) < buffer_size:
-                    refill_buffer()
-
-                remaining = row_capacity - pos
-
-                # Find largest doc that fits entirely
-                best_idx = -1
-                best_len = 0
-                for i, doc in enumerate(doc_buffer):
-                    doc_len = len(doc)
-                    if doc_len <= remaining and doc_len > best_len:
-                        best_idx = i
-                        best_len = doc_len
-
-                if best_idx >= 0:
-                    doc = doc_buffer.pop(best_idx)
-                    row_buffer[row_idx, pos:pos + len(doc)] = torch.tensor(doc, dtype=torch.long)
-                    pos += len(doc)
-                else:
-                    # No doc fits — crop shortest to fill remaining
-                    shortest_idx = min(range(len(doc_buffer)), key=lambda i: len(doc_buffer[i]))
-                    doc = doc_buffer.pop(shortest_idx)
-                    row_buffer[row_idx, pos:pos + remaining] = torch.tensor(doc[:remaining], dtype=torch.long)
-                    pos += remaining
-
-        cpu_inputs.copy_(row_buffer[:, :-1])
-        cpu_targets.copy_(row_buffer[:, 1:])
-        gpu_buffer.copy_(cpu_buffer, non_blocking=True)
-        yield inputs, targets, epoch
-
+    # Create stratification key combining trial and label
+    df['strat_key'] = df['trial_id'].astype(str) + '_' + df['final_label'].astype(str)
+ 
+    # First split: separate test set
+    train_val_df, test_df = train_test_split(
+        df, test_size=TEST_SPLIT, random_state=RANDOM_SEED,
+        stratify=df['strat_key'],
+    )
+ 
+    # Second split: separate validation from training
+    val_frac = VAL_SPLIT / (1 - TEST_SPLIT)
+    train_df, val_df = train_test_split(
+        train_val_df, test_size=val_frac, random_state=RANDOM_SEED,
+        stratify=train_val_df['strat_key'],
+    )
+ 
+    df.drop(columns=['strat_key'], inplace=True)
+    train_df = train_df.drop(columns=['strat_key'], errors='ignore')
+    val_df = val_df.drop(columns=['strat_key'], errors='ignore')
+    test_df = test_df.drop(columns=['strat_key'], errors='ignore')
+ 
+    print(f"Splits: train={len(train_df)}, val={len(val_df)}, test={len(test_df)}")
+    return train_df, val_df, test_df
+ 
+ 
+def compute_class_weights(train_df: pd.DataFrame) -> torch.Tensor:
+    """
+    Compute class weights inversely proportional to class frequency.
+    """
+    counts = train_df['final_label'].value_counts().sort_index()
+    total = len(train_df)
+    weights = torch.tensor(
+        [total / (NUM_CLASSES * counts.get(i, 1)) for i in range(NUM_CLASSES)],
+        dtype=torch.float32,
+    )
+    print(f"Class weights: {weights.tolist()}")
+    return weights
+ 
+ 
 # ---------------------------------------------------------------------------
-# Evaluation (DO NOT CHANGE — this is the fixed metric)
+# PyTorch Dataset
 # ---------------------------------------------------------------------------
-
-@torch.no_grad()
-def evaluate_bpb(model, tokenizer, batch_size):
+ 
+class VAMRDataset(Dataset):
     """
-    Bits per byte (BPB): vocab size-independent evaluation metric.
-    Sums per-token cross-entropy (in nats), sums target byte lengths,
-    then converts nats/byte to bits/byte. Special tokens (byte length 0)
-    are excluded from both sums.
-    Uses fixed MAX_SEQ_LEN so results are comparable across configs.
+    Dataset for VA-MR classification fine-tuning.
+ 
+    Tokenizes text with ClinicalBERT tokenizer, pads/truncates to MAX_SEQ_LEN.
     """
-    token_bytes = get_token_bytes(device="cuda")
-    val_loader = make_dataloader(tokenizer, batch_size, MAX_SEQ_LEN, "val")
-    steps = EVAL_TOKENS // (batch_size * MAX_SEQ_LEN)
-    total_nats = 0.0
-    total_bytes = 0
-    for _ in range(steps):
-        x, y, _ = next(val_loader)
-        loss_flat = model(x, y, reduction='none').view(-1)
-        y_flat = y.view(-1)
-        nbytes = token_bytes[y_flat]
-        mask = nbytes > 0
-        total_nats += (loss_flat * mask).sum().item()
-        total_bytes += nbytes.sum().item()
-    return total_nats / (math.log(2) * total_bytes)
-
+ 
+    def __init__(self, df: pd.DataFrame, tokenizer):
+        self.texts = df['text'].tolist()
+        self.labels = df['final_label'].astype(int).tolist()
+        self.confidence_tiers = df.get('label_confidence_tier', pd.Series(['medium'] * len(df))).tolist()
+        self.tokenizer = tokenizer
+ 
+    def __len__(self):
+        return len(self.texts)
+ 
+    def __getitem__(self, idx):
+        encoding = self.tokenizer(
+            self.texts[idx],
+            max_length=MAX_SEQ_LEN,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt',
+        )
+        return {
+            'input_ids': encoding['input_ids'].squeeze(0),
+            'attention_mask': encoding['attention_mask'].squeeze(0),
+            'label': torch.tensor(self.labels[idx], dtype=torch.long),
+        }
+ 
+ 
+# ---------------------------------------------------------------------------
+# Evaluation function (DO NOT CHANGE -- this is the fixed metric)
+# ---------------------------------------------------------------------------
+ 
+def evaluate_classification(model, val_loader, device='cuda'):
+    """
+    Fixed evaluation function for VA-MR classification.
+ 
+    Returns a dict with all metrics. The primary metric for keep/discard
+    decisions is macro_f1.
+ 
+    The agent reads macro_f1 the same way autoresearch reads val_bpb --
+    just now higher is better instead of lower.
+    """
+    model.eval()
+    all_preds = []
+    all_labels = []
+ 
+    with torch.no_grad():
+        for batch in val_loader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['label']
+ 
+            logits = model(input_ids, attention_mask=attention_mask)
+            if hasattr(logits, 'logits'):
+                logits = logits.logits
+ 
+            preds = logits.argmax(dim=-1).cpu().numpy()
+            all_preds.extend(preds)
+            all_labels.extend(labels.numpy())
+ 
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+ 
+    macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+    kappa = cohen_kappa_score(all_labels, all_preds)
+ 
+    per_class_f1 = f1_score(
+        all_labels, all_preds, average=None, labels=list(range(NUM_CLASSES)),
+        zero_division=0,
+    )
+ 
+    cm = confusion_matrix(all_labels, all_preds, labels=list(range(NUM_CLASSES)))
+ 
+    results = {
+        'macro_f1': round(float(macro_f1), 6),
+        'kappa': round(float(kappa), 4),
+    }
+    for i, name in enumerate(STAGE_NAMES):
+        results[f'f1_{name.lower()}'] = round(float(per_class_f1[i]), 4)
+ 
+    return results
+ 
+ 
+def print_evaluation_results(results: dict):
+    """Print evaluation results in the format that the agent greps for."""
+    print("---")
+    for key, val in results.items():
+        print(f"{key + ':':22s}{val}")
+ 
+ 
+# ---------------------------------------------------------------------------
+# Content validity evaluation
+# ---------------------------------------------------------------------------
+ 
+def evaluate_content_validity(
+    model, tokenizer, test_set_path: str, device='cuda',
+) -> dict:
+    """
+    Evaluate content validity on the prototypical test set.
+ 
+    Loads the content_validity_test_set.jsonl and checks whether
+    the model correctly classifies prototypical expressions.
+    """
+    if not os.path.exists(test_set_path):
+        print(f"Warning: content validity test set not found at {test_set_path}")
+        return {}
+ 
+    model.eval()
+    items = []
+    with open(test_set_path) as f:
+        for line in f:
+            items.append(json.loads(line))
+ 
+    correct_by_stage = {i: {'correct': 0, 'total': 0} for i in range(NUM_CLASSES)}
+ 
+    with torch.no_grad():
+        for item in items:
+            encoding = tokenizer(
+                item['text'],
+                max_length=MAX_SEQ_LEN,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt',
+            )
+            input_ids = encoding['input_ids'].to(device)
+            attention_mask = encoding['attention_mask'].to(device)
+ 
+            logits = model(input_ids, attention_mask=attention_mask)
+            if hasattr(logits, 'logits'):
+                logits = logits.logits
+ 
+            pred = logits.argmax(dim=-1).item()
+            expected = item['expected_stage']
+ 
+            correct_by_stage[expected]['total'] += 1
+            if pred == expected:
+                correct_by_stage[expected]['correct'] += 1
+ 
+    results = {}
+    for stage_id, name in enumerate(STAGE_NAMES):
+        stats = correct_by_stage[stage_id]
+        if stats['total'] > 0:
+            sensitivity = stats['correct'] / stats['total']
+            results[f'cv_sensitivity_{name.lower()}'] = round(sensitivity, 4)
+            if sensitivity < 0.5:
+                print(f"WARNING: Low content validity for {name}: {sensitivity:.4f}")
+ 
+    return results
+ 
+ 
+# ---------------------------------------------------------------------------
+# Utility for train.py
+# ---------------------------------------------------------------------------
+ 
+def setup_data(dataset_path: str, tokenizer_name: str = 'emilyalsentzer/Bio_ClinicalBERT'):
+    """
+    One-call setup function for train.py to use.
+ 
+    Returns tokenizer, data loaders, and class weights.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    df = load_labeled_dataset(dataset_path)
+    train_df, val_df, test_df = make_stratified_splits(df)
+    class_weights = compute_class_weights(train_df)
+ 
+    train_dataset = VAMRDataset(train_df, tokenizer)
+    val_dataset = VAMRDataset(val_df, tokenizer)
+    test_dataset = VAMRDataset(test_df, tokenizer)
+ 
+    return {
+        'tokenizer': tokenizer,
+        'train_dataset': train_dataset,
+        'val_dataset': val_dataset,
+        'test_dataset': test_dataset,
+        'class_weights': class_weights,
+        'train_df': train_df,
+        'val_df': val_df,
+        'test_df': test_df,
+    }
+ 
+ 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
+ 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare data and tokenizer for autoresearch")
-    parser.add_argument("--num-shards", type=int, default=10, help="Number of training shards to download (-1 = all). Val shard is always pinned.")
-    parser.add_argument("--download-workers", type=int, default=8, help="Number of parallel download workers")
+    parser = argparse.ArgumentParser(description="Prepare VA-MR dataset for AutoResearch")
+    parser.add_argument("--dataset", type=str, required=True, help="Path to master_segments.csv or .jsonl")
     args = parser.parse_args()
+ 
+    os.makedirs(DATA_DIR, exist_ok=True)
+    data = setup_data(args.dataset)
+    print(f"\nData prepared. Train={len(data['train_dataset'])}, "
+          f"Val={len(data['val_dataset'])}, Test={len(data['test_dataset'])}")
+    print("Ready to train.")
 
-    num_shards = MAX_SHARD if args.num_shards == -1 else args.num_shards
+Expand lines below
 
-    print(f"Cache directory: {CACHE_DIR}")
+program_vamr.md
++120
+# autoresearch: VA-MR Classification Fine-Tuning
+ 
+This is an adaptation of autoresearch for fine-tuning a classification model
+(Mindful-BERT) on the Vigilance-Avoidance Metacognition-Reappraisal (VA-MR)
+framework for therapeutic dialogue analysis.
+ 
+## Domain Context
+ 
+The VA-MR framework describes four stages of contemplative transformation
+that participants express during Mindfulness-Oriented Recovery Enhancement:
+ 
+- **Stage 0 - Vigilance**: Pain hypervigilance, attentional fragmentation,
+  catastrophic thinking. Attention is reactive rather than directed.
+- **Stage 1 - Avoidance**: Attentional control deployed for avoidance rather
+  than investigation. Deliberately pushing pain away, distraction as strategy.
+- **Stage 2 - Metacognition**: Observing one's own mental processes. Noticing
+  reactions, watching thoughts arise and pass, stepping back from experience.
+- **Stage 3 - Reappraisal**: Fundamental reinterpretation of sensory experience.
+  Pain as changing, composed of distinct sensations, lacking fixed significance.
+ 
+The training data consists of transcript segments from therapy sessions,
+labeled with these four stages by a zero-shot LLM pipeline validated against
+human qualitative coders.
+ 
+## Setup
+ 
+1. **Agree on a run tag** (e.g. `vamr_mar14`).
+2. **Create the branch**: `git checkout -b autoresearch/<tag>`
+3. **Read the files**:
+   - `prepare_vamr.py` — fixed data prep, evaluation function. DO NOT MODIFY.
+   - `train_vamr.py` — the file you modify. Model, optimizer, training loop.
+   - This file — domain context and instructions.
+4. **Verify data exists**: The master segment dataset should be at the path
+   specified by `--dataset`.
+5. **Initialize results.tsv** with header row.
+6. **Confirm and go**.
+ 
+## Constraints
+ 
+**What you CAN do:**
+- Modify `train_vamr.py` — everything is fair game: model architecture,
+  optimizer, hyperparameters, training loop, batch size, pooling strategy,
+  data augmentation, loss function, layer freezing, etc.
+ 
+**What you CANNOT do:**
+- Modify `prepare_vamr.py`. It contains the fixed evaluation and data loading.
+- Install new packages.
+- Modify the evaluation function.
+ 
+## Metric
+ 
+**The goal: get the highest macro_f1.**
+ 
+Higher is better (opposite of val_bpb in the original autoresearch).
+ 
+The keep criterion:
+1. macro_f1 must strictly improve over current best
+2. **AND** no single per-class F1 may drop below 0.25
+ 
+This compound criterion prevents abandoning minority classes. The
+`label_confidence_tier` column is available for curriculum learning.
+ 
+## Output format
+ 
+The script prints:
+```
+---
+macro_f1:             0.782300
+kappa:                0.7156
+f1_vigilance:         0.8102
+f1_avoidance:         0.7234
+f1_metacognition:     0.7891
+f1_reappraisal:       0.7065
+training_seconds:     300.1
+peak_vram_mb:         4500.2
+num_params_M:         110.0
+num_steps:            450
+```
+ 
+Extract the key metric: `grep "^macro_f1:" run.log`
+ 
+## Logging results
+ 
+Log to `results.tsv` (tab-separated):
+ 
+```
+commit	macro_f1	memory_gb	status	description
+a1b2c3d	0.782300	4.4	keep	baseline ClinicalBERT + linear head
+b2c3d4e	0.795100	4.5	keep	MLP head (768->256->4) with ReLU
+c3d4e5f	0.781000	4.4	discard	switch to mean pooling (slight decrease)
+```
+ 
+## Exploration Dimensions
+ 
+Small-data classification regime. Key directions:
+ 
+- **Architecture**: Base model (ClinicalBERT, BioBERT, RoBERTa, DeBERTa-v3),
+  classification head (linear, MLP, attention-weighted pooling), pooling strategy
+- **Training**: Layer freezing, layer-wise LR decay, label smoothing,
+  focal loss, mixup augmentation, contrastive losses
+- **Regularization**: Dropout, weight decay, early stopping
+- **Curriculum**: Train on high-confidence segments first (use `label_confidence_tier`)
+- **Multi-task**: Binary auxiliary task predicting early vs. late stages
+- **Augmentation**: Synonym replacement, random token deletion, back-translation
+ 
+## The experiment loop
+ 
+Same as original autoresearch:
+ 
+LOOP FOREVER:
+1. Look at git state
+2. Modify `train_vamr.py` with an experimental idea
+3. git commit
+4. Run: `uv run train_vamr.py --dataset <path> > run.log 2>&1`
+5. Extract: `grep "^macro_f1:\|^peak_vram_mb:" run.log`
+6. If crashed: check `tail -n 50 run.log`, try to fix
+7. Log results to results.tsv
+8. If macro_f1 improved AND all per-class F1 >= 0.25: keep
+9. If not: git reset
+10. **NEVER STOP** — run indefinitely until manually interrupted
+
+Expand lines below
+
+train_vamr.py
++182
+"""
+train_vamr.py
+-------------
+Baseline training script for VA-MR classification fine-tuning.
+ 
+This is the file the AutoResearch agent modifies.
+It fine-tunes ClinicalBERT for 4-class VA-MR stage classification.
+ 
+Usage: uv run train_vamr.py --dataset /path/to/master_segments.csv
+"""
+ 
+import os
+import time
+import argparse
+ 
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from transformers import AutoModel
+ 
+from prepare_vamr import (
+    NUM_CLASSES, MAX_SEQ_LEN, TIME_BUDGET,
+    MIN_PER_CLASS_F1, STAGE_NAMES,
+    setup_data, evaluate_classification, print_evaluation_results,
+)
+ 
+# ---------------------------------------------------------------------------
+# Hyperparameters (agent can modify these)
+# ---------------------------------------------------------------------------
+ 
+BASE_MODEL = 'emilyalsentzer/Bio_ClinicalBERT'
+LEARNING_RATE = 2e-5
+WEIGHT_DECAY = 0.01
+BATCH_SIZE = 16
+DROPOUT = 0.1
+WARMUP_RATIO = 0.1
+MAX_EPOCHS = 50   # will be limited by TIME_BUDGET anyway
+GRADIENT_ACCUMULATION = 1
+ 
+# ---------------------------------------------------------------------------
+# Model (agent can modify architecture)
+# ---------------------------------------------------------------------------
+ 
+class MindfulBERT(nn.Module):
+    """
+    ClinicalBERT with a classification head for VA-MR stage prediction.
+ 
+    Baseline: single linear layer on [CLS] token.
+    The agent may change this to MLP, attention pooling, etc.
+    """
+ 
+    def __init__(self, model_name=BASE_MODEL, num_classes=NUM_CLASSES, dropout=DROPOUT):
+        super().__init__()
+        self.encoder = AutoModel.from_pretrained(model_name)
+        hidden_size = self.encoder.config.hidden_size
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(hidden_size, num_classes)
+ 
+    def forward(self, input_ids, attention_mask=None):
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        cls_output = outputs.last_hidden_state[:, 0, :]  # [CLS] token
+        cls_output = self.dropout(cls_output)
+        logits = self.classifier(cls_output)
+        return logits
+ 
+# ---------------------------------------------------------------------------
+# Training loop (agent can modify)
+# ---------------------------------------------------------------------------
+ 
+def train(dataset_path: str):
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+ 
+    # Load data
+    data = setup_data(dataset_path, tokenizer_name=BASE_MODEL)
+    train_loader = DataLoader(
+        data['train_dataset'], batch_size=BATCH_SIZE, shuffle=True, drop_last=True,
+    )
+    val_loader = DataLoader(
+        data['val_dataset'], batch_size=BATCH_SIZE, shuffle=False,
+    )
+ 
+    # Model
+    model = MindfulBERT().to(device)
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"Model parameters: {num_params / 1e6:.1f}M")
+ 
+    # Optimizer
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY,
+    )
+ 
+    # Loss with class weights
+    class_weights = data['class_weights'].to(device)
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+ 
+    # Learning rate schedule: linear warmup then linear decay
+    total_steps = len(train_loader) * MAX_EPOCHS // GRADIENT_ACCUMULATION
+    warmup_steps = int(total_steps * WARMUP_RATIO)
+ 
+    def get_lr(step):
+        if step < warmup_steps:
+            return LEARNING_RATE * step / max(1, warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return LEARNING_RATE * max(0.0, 1.0 - progress)
+ 
+    # Training
+    t0 = time.time()
+    step = 0
+    best_macro_f1 = 0.0
+    best_results = None
+ 
+    for epoch in range(MAX_EPOCHS):
+        model.train()
+        epoch_loss = 0.0
+        n_batches = 0
+ 
+        for batch in train_loader:
+            # Check time budget
+            elapsed = time.time() - t0
+            if elapsed > TIME_BUDGET:
+                break
+ 
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['label'].to(device)
+ 
+            logits = model(input_ids, attention_mask=attention_mask)
+            loss = criterion(logits, labels)
+            loss = loss / GRADIENT_ACCUMULATION
+            loss.backward()
+ 
+            if (step + 1) % GRADIENT_ACCUMULATION == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+ 
+                # Update LR
+                lr = get_lr(step // GRADIENT_ACCUMULATION)
+                for pg in optimizer.param_groups:
+                    pg['lr'] = lr
+ 
+            epoch_loss += loss.item() * GRADIENT_ACCUMULATION
+            n_batches += 1
+            step += 1
+ 
+        # Check time budget at epoch level too
+        elapsed = time.time() - t0
+        if elapsed > TIME_BUDGET:
+            break
+ 
+        # Evaluate
+        if n_batches > 0:
+            avg_loss = epoch_loss / n_batches
+            results = evaluate_classification(model, val_loader, device=device)
+ 
+            print(f"Epoch {epoch + 1}: loss={avg_loss:.4f} "
+                  f"macro_f1={results['macro_f1']:.4f} "
+                  f"kappa={results['kappa']:.4f} "
+                  f"elapsed={elapsed:.0f}s")
+ 
+            if results['macro_f1'] > best_macro_f1:
+                best_macro_f1 = results['macro_f1']
+                best_results = results.copy()
+ 
+    # Final results
+    total_time = time.time() - t0
+    peak_vram = torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+ 
     print()
-
-    # Step 1: Download data
-    download_data(num_shards, download_workers=args.download_workers)
-    print()
-
-    # Step 2: Train tokenizer
-    train_tokenizer()
-    print()
-    print("Done! Ready to train.")
+    if best_results:
+        print_evaluation_results(best_results)
+    print(f"{'training_seconds:':22s}{total_time:.1f}")
+    print(f"{'peak_vram_mb:':22s}{peak_vram:.1f}")
+    print(f"{'num_params_M:':22s}{num_params / 1e6:.1f}")
+    print(f"{'num_steps:':22s}{step}")
+ 
+ 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', type=str, required=True,
+                        help='Path to master_segments.csv or .jsonl')
+    args = parser.parse_args()
+    train(args.dataset)
