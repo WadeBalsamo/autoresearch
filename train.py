@@ -1,5 +1,5 @@
 """
-train_vamr.py
+train.py
 -------------
 Baseline training script for VA-MR classification fine-tuning.
  
