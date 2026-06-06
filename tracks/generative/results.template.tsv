@@ -1,0 +1,2 @@
+commit	primary_metric	eval_ppl	test_eval_loss	trainable_params_M	peak_vram_mb	status	description
+SEED	-9.999999	0.00	0.000000	0.00	0.0	baseline	BioMistral-7B QLoRA r16 nf4, paged AdamW8bit, real+synthetic SFT

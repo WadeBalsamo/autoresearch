@@ -1,23 +1,58 @@
-# Python-generated files
+# --- Python-generated files ---
 __pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.ipynb_checkpoints/
 
-# Virtual environments
+# --- Virtual environments ---
 .venv
+venv/
+.uv/
 worktrees/
-results/
 queue/
 
-# Agent prompt files (generated per-session by launchers)
+# --- Agent prompt files (generated per-session by launchers) ---
 CLAUDE.md
 AGENTS.md
 
-# Experimental code/artifacts
+# --- Experimental code/artifacts ---
 dev/
+tracks/*/_sweep_train.py
+leaderboard.md
+.venv-cpu/
 
-# Results file
+# --- Per-run experiment logs (commit results.template.tsv instead) ---
 results.tsv
+results/
+runs/
+
+# --- Trial data / PHI: NEVER commit. Only the tiny synthetic fixtures are allowed. ---
+data/
+*.csv
+*.jsonl
+!tests/fixtures/
+!tests/fixtures/*.csv
+!tests/fixtures/*.jsonl
+
+# --- Model weights / checkpoints / adapters ---
+checkpoints/
+adapters/
+*.ckpt
+*.safetensors
+*.bin
+*.pt
+wandb/
+*.log
+
+# --- Synthetic-data + HF/torch caches ---
+synth_cache/
+synth_out/
+.cache/
+hf_cache/
+
+# keep the lockfile out until the user regenerates it for their CUDA stack
+uv.lock

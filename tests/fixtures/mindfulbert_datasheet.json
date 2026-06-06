@@ -1,0 +1,25 @@
+{
+  "dataset_version": "1.0",
+  "n_examples": 18,
+  "n_participants": 6,
+  "n_sessions": 12,
+  "label_basis": "stage_difference",
+  "direction_distribution": {
+    "stayed": 6,
+    "advanced": 5,
+    "regressed": 7
+  },
+  "provenance_mix": {
+    "llm_zero_shot": 15,
+    "human_consensus": 2,
+    "gnn_consensus": 1
+  },
+  "n_abstained": 0,
+  "gate_passed": false,
+  "augmentation": {
+    "enabled": false,
+    "n_augmented": 0,
+    "retained": false,
+    "ablation": {}
+  }
+}
