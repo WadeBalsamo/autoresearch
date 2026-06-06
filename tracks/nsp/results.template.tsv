@@ -1,0 +1,2 @@
+commit	primary_metric	test_roc_auc	mrr	recall@5	peak_vram_mb	status	description
+SEED	0.000000	0.000000	0.0000	0.0000	0.0	baseline	BioBERT NSP head, weighted CE, mismatched easy negatives

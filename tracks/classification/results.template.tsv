@@ -1,0 +1,2 @@
+commit	macro_f1	test_macro_f1	kappa	min_class_f1	peak_vram_mb	status	description
+SEED	0.000000	0.000000	0.0000	0.000	0.0	baseline	ClinicalBERT + linear head on [CLS], weighted CE, 5-class

@@ -1,0 +1,97 @@
+segment_id,trial_id,participant_id,session_id,session_number,speaker,text,word_count,primary_stage,llm_confidence_primary,final_label,final_label_source,label_confidence_tier
+P01_s1_00,MoveMORE,P01,P01_sess1,1,participant,P01 sess1 seg0: a participant utterance expressing attention regulation.,9,2,0.68,2,llm_zero_shot,high
+P01_s1_00_t,MoveMORE,P01,P01_sess1,1,therapist,therapist cue.,2,,,,,
+P01_s1_01,MoveMORE,P01,P01_sess1,1,participant,P01 sess1 seg1: a participant utterance expressing reappraisal.,8,4,0.66,4,llm_zero_shot,high
+P01_s1_01_t,MoveMORE,P01,P01_sess1,1,therapist,therapist cue.,2,,,,,
+P01_s1_02,MoveMORE,P01,P01_sess1,1,participant,P01 sess1 seg2: a participant utterance expressing avoidance.,8,1,0.54,1,llm_zero_shot,high
+P01_s1_02_t,MoveMORE,P01,P01_sess1,1,therapist,therapist cue.,2,,,,,
+P01_s1_03,MoveMORE,P01,P01_sess1,1,participant,P01 sess1 seg3: a participant utterance expressing avoidance.,8,1,0.75,1,llm_zero_shot,high
+P01_s1_03_t,MoveMORE,P01,P01_sess1,1,therapist,therapist cue.,2,,,,,
+P01_s5_00,MoveMORE,P01,P01_sess5,5,participant,P01 sess5 seg0: a participant utterance expressing vigilance.,8,0,0.78,0,llm_zero_shot,high
+P01_s5_00_t,MoveMORE,P01,P01_sess5,5,therapist,therapist cue.,2,,,,,
+P01_s5_01,MoveMORE,P01,P01_sess5,5,participant,P01 sess5 seg1: a participant utterance expressing reappraisal.,8,4,0.68,4,llm_zero_shot,low
+P01_s5_01_t,MoveMORE,P01,P01_sess5,5,therapist,therapist cue.,2,,,,,
+P01_s5_02,MoveMORE,P01,P01_sess5,5,participant,P01 sess5 seg2: a participant utterance expressing reappraisal.,8,4,0.63,4,llm_zero_shot,high
+P01_s5_02_t,MoveMORE,P01,P01_sess5,5,therapist,therapist cue.,2,,,,,
+P01_s5_03,MoveMORE,P01,P01_sess5,5,participant,P01 sess5 seg3: a participant utterance expressing vigilance.,8,0,0.64,0,llm_zero_shot,low
+P01_s5_03_t,MoveMORE,P01,P01_sess5,5,therapist,therapist cue.,2,,,,,
+P02_s1_00,MoveMORE,P02,P02_sess1,1,participant,P02 sess1 seg0: a participant utterance expressing vigilance.,8,0,0.76,0,llm_zero_shot,low
+P02_s1_00_t,MoveMORE,P02,P02_sess1,1,therapist,therapist cue.,2,,,,,
+P02_s1_01,MoveMORE,P02,P02_sess1,1,participant,P02 sess1 seg1: a participant utterance expressing vigilance.,8,0,0.82,0,llm_zero_shot,low
+P02_s1_01_t,MoveMORE,P02,P02_sess1,1,therapist,therapist cue.,2,,,,,
+P02_s1_02,MoveMORE,P02,P02_sess1,1,participant,P02 sess1 seg2: a participant utterance expressing reappraisal.,8,4,0.72,4,llm_zero_shot,high
+P02_s1_02_t,MoveMORE,P02,P02_sess1,1,therapist,therapist cue.,2,,,,,
+P02_s1_03,MoveMORE,P02,P02_sess1,1,participant,P02 sess1 seg3: a participant utterance expressing attention regulation.,9,2,0.76,2,llm_zero_shot,medium
+P02_s1_03_t,MoveMORE,P02,P02_sess1,1,therapist,therapist cue.,2,,,,,
+P02_s5_00,MoveMORE,P02,P02_sess5,5,participant,P02 sess5 seg0: a participant utterance expressing attention regulation.,9,2,0.86,2,llm_zero_shot,high
+P02_s5_00_t,MoveMORE,P02,P02_sess5,5,therapist,therapist cue.,2,,,,,
+P02_s5_01,MoveMORE,P02,P02_sess5,5,participant,P02 sess5 seg1: a participant utterance expressing vigilance.,8,0,0.64,0,llm_zero_shot,low
+P02_s5_01_t,MoveMORE,P02,P02_sess5,5,therapist,therapist cue.,2,,,,,
+P02_s5_02,MoveMORE,P02,P02_sess5,5,participant,P02 sess5 seg2: a participant utterance expressing metacognition.,8,3,0.77,3,llm_zero_shot,medium
+P02_s5_02_t,MoveMORE,P02,P02_sess5,5,therapist,therapist cue.,2,,,,,
+P02_s5_03,MoveMORE,P02,P02_sess5,5,participant,P02 sess5 seg3: a participant utterance expressing reappraisal.,8,4,0.57,4,llm_zero_shot,medium
+P02_s5_03_t,MoveMORE,P02,P02_sess5,5,therapist,therapist cue.,2,,,,,
+P03_s1_00,MoveMORE,P03,P03_sess1,1,participant,P03 sess1 seg0: a participant utterance expressing metacognition.,8,3,0.52,3,llm_zero_shot,medium
+P03_s1_00_t,MoveMORE,P03,P03_sess1,1,therapist,therapist cue.,2,,,,,
+P03_s1_01,MoveMORE,P03,P03_sess1,1,participant,P03 sess1 seg1: a participant utterance expressing reappraisal.,8,4,0.86,4,llm_zero_shot,low
+P03_s1_01_t,MoveMORE,P03,P03_sess1,1,therapist,therapist cue.,2,,,,,
+P03_s1_02,MoveMORE,P03,P03_sess1,1,participant,P03 sess1 seg2: a participant utterance expressing attention regulation.,9,2,0.72,2,llm_zero_shot,low
+P03_s1_02_t,MoveMORE,P03,P03_sess1,1,therapist,therapist cue.,2,,,,,
+P03_s1_03,MoveMORE,P03,P03_sess1,1,participant,P03 sess1 seg3: a participant utterance expressing vigilance.,8,0,0.71,0,llm_zero_shot,medium
+P03_s1_03_t,MoveMORE,P03,P03_sess1,1,therapist,therapist cue.,2,,,,,
+P03_s5_00,MoveMORE,P03,P03_sess5,5,participant,P03 sess5 seg0: a participant utterance expressing vigilance.,8,0,0.82,0,llm_zero_shot,low
+P03_s5_00_t,MoveMORE,P03,P03_sess5,5,therapist,therapist cue.,2,,,,,
+P03_s5_01,MoveMORE,P03,P03_sess5,5,participant,P03 sess5 seg1: a participant utterance expressing metacognition.,8,3,0.82,3,llm_zero_shot,medium
+P03_s5_01_t,MoveMORE,P03,P03_sess5,5,therapist,therapist cue.,2,,,,,
+P03_s5_02,MoveMORE,P03,P03_sess5,5,participant,P03 sess5 seg2: a participant utterance expressing vigilance.,8,0,0.66,0,llm_zero_shot,medium
+P03_s5_02_t,MoveMORE,P03,P03_sess5,5,therapist,therapist cue.,2,,,,,
+P03_s5_03,MoveMORE,P03,P03_sess5,5,participant,P03 sess5 seg3: a participant utterance expressing metacognition.,8,3,0.6,3,llm_zero_shot,high
+P03_s5_03_t,MoveMORE,P03,P03_sess5,5,therapist,therapist cue.,2,,,,,
+P04_s1_00,MoveMORE,P04,P04_sess1,1,participant,P04 sess1 seg0: a participant utterance expressing avoidance.,8,1,0.68,1,llm_zero_shot,medium
+P04_s1_00_t,MoveMORE,P04,P04_sess1,1,therapist,therapist cue.,2,,,,,
+P04_s1_01,MoveMORE,P04,P04_sess1,1,participant,P04 sess1 seg1: a participant utterance expressing avoidance.,8,1,0.68,1,llm_zero_shot,medium
+P04_s1_01_t,MoveMORE,P04,P04_sess1,1,therapist,therapist cue.,2,,,,,
+P04_s1_02,MoveMORE,P04,P04_sess1,1,participant,P04 sess1 seg2: a participant utterance expressing metacognition.,8,3,0.63,3,llm_zero_shot,low
+P04_s1_02_t,MoveMORE,P04,P04_sess1,1,therapist,therapist cue.,2,,,,,
+P04_s1_03,MoveMORE,P04,P04_sess1,1,participant,P04 sess1 seg3: a participant utterance expressing metacognition.,8,3,0.57,3,llm_zero_shot,high
+P04_s1_03_t,MoveMORE,P04,P04_sess1,1,therapist,therapist cue.,2,,,,,
+P04_s5_00,MoveMORE,P04,P04_sess5,5,participant,P04 sess5 seg0: a participant utterance expressing avoidance.,8,1,0.61,1,llm_zero_shot,low
+P04_s5_00_t,MoveMORE,P04,P04_sess5,5,therapist,therapist cue.,2,,,,,
+P04_s5_01,MoveMORE,P04,P04_sess5,5,participant,P04 sess5 seg1: a participant utterance expressing avoidance.,8,1,0.63,1,llm_zero_shot,medium
+P04_s5_01_t,MoveMORE,P04,P04_sess5,5,therapist,therapist cue.,2,,,,,
+P04_s5_02,MoveMORE,P04,P04_sess5,5,participant,P04 sess5 seg2: a participant utterance expressing reappraisal.,8,4,0.77,4,llm_zero_shot,medium
+P04_s5_02_t,MoveMORE,P04,P04_sess5,5,therapist,therapist cue.,2,,,,,
+P04_s5_03,MoveMORE,P04,P04_sess5,5,participant,P04 sess5 seg3: a participant utterance expressing reappraisal.,8,4,0.79,4,llm_zero_shot,low
+P04_s5_03_t,MoveMORE,P04,P04_sess5,5,therapist,therapist cue.,2,,,,,
+P05_s1_00,MoveMORE,P05,P05_sess1,1,participant,P05 sess1 seg0: a participant utterance expressing metacognition.,8,3,0.86,3,llm_zero_shot,low
+P05_s1_00_t,MoveMORE,P05,P05_sess1,1,therapist,therapist cue.,2,,,,,
+P05_s1_01,MoveMORE,P05,P05_sess1,1,participant,P05 sess1 seg1: a participant utterance expressing metacognition.,8,3,0.55,3,llm_zero_shot,medium
+P05_s1_01_t,MoveMORE,P05,P05_sess1,1,therapist,therapist cue.,2,,,,,
+P05_s1_02,MoveMORE,P05,P05_sess1,1,participant,P05 sess1 seg2: a participant utterance expressing vigilance.,8,0,0.53,0,llm_zero_shot,high
+P05_s1_02_t,MoveMORE,P05,P05_sess1,1,therapist,therapist cue.,2,,,,,
+P05_s1_03,MoveMORE,P05,P05_sess1,1,participant,P05 sess1 seg3: a participant utterance expressing avoidance.,8,1,0.65,1,llm_zero_shot,high
+P05_s1_03_t,MoveMORE,P05,P05_sess1,1,therapist,therapist cue.,2,,,,,
+P05_s5_00,MoveMORE,P05,P05_sess5,5,participant,P05 sess5 seg0: a participant utterance expressing vigilance.,8,0,0.57,0,llm_zero_shot,low
+P05_s5_00_t,MoveMORE,P05,P05_sess5,5,therapist,therapist cue.,2,,,,,
+P05_s5_01,MoveMORE,P05,P05_sess5,5,participant,P05 sess5 seg1: a participant utterance expressing reappraisal.,8,4,0.53,4,llm_zero_shot,high
+P05_s5_01_t,MoveMORE,P05,P05_sess5,5,therapist,therapist cue.,2,,,,,
+P05_s5_02,MoveMORE,P05,P05_sess5,5,participant,P05 sess5 seg2: a participant utterance expressing metacognition.,8,3,0.79,3,llm_zero_shot,high
+P05_s5_02_t,MoveMORE,P05,P05_sess5,5,therapist,therapist cue.,2,,,,,
+P05_s5_03,MoveMORE,P05,P05_sess5,5,participant,P05 sess5 seg3: a participant utterance expressing attention regulation.,9,2,0.56,2,llm_zero_shot,medium
+P05_s5_03_t,MoveMORE,P05,P05_sess5,5,therapist,therapist cue.,2,,,,,
+P06_s1_00,MoveMORE,P06,P06_sess1,1,participant,P06 sess1 seg0: a participant utterance expressing metacognition.,8,3,0.64,3,llm_zero_shot,medium
+P06_s1_00_t,MoveMORE,P06,P06_sess1,1,therapist,therapist cue.,2,,,,,
+P06_s1_01,MoveMORE,P06,P06_sess1,1,participant,P06 sess1 seg1: a participant utterance expressing attention regulation.,9,2,0.62,2,llm_zero_shot,low
+P06_s1_01_t,MoveMORE,P06,P06_sess1,1,therapist,therapist cue.,2,,,,,
+P06_s1_02,MoveMORE,P06,P06_sess1,1,participant,P06 sess1 seg2: a participant utterance expressing reappraisal.,8,4,0.59,4,llm_zero_shot,high
+P06_s1_02_t,MoveMORE,P06,P06_sess1,1,therapist,therapist cue.,2,,,,,
+P06_s1_03,MoveMORE,P06,P06_sess1,1,participant,P06 sess1 seg3: a participant utterance expressing avoidance.,8,1,0.74,1,llm_zero_shot,low
+P06_s1_03_t,MoveMORE,P06,P06_sess1,1,therapist,therapist cue.,2,,,,,
+P06_s5_00,MoveMORE,P06,P06_sess5,5,participant,P06 sess5 seg0: a participant utterance expressing attention regulation.,9,2,0.89,2,llm_zero_shot,low
+P06_s5_00_t,MoveMORE,P06,P06_sess5,5,therapist,therapist cue.,2,,,,,
+P06_s5_01,MoveMORE,P06,P06_sess5,5,participant,P06 sess5 seg1: a participant utterance expressing reappraisal.,8,4,0.91,4,llm_zero_shot,medium
+P06_s5_01_t,MoveMORE,P06,P06_sess5,5,therapist,therapist cue.,2,,,,,
+P06_s5_02,MoveMORE,P06,P06_sess5,5,participant,P06 sess5 seg2: a participant utterance expressing reappraisal.,8,4,0.85,4,human_consensus,low
+P06_s5_02_t,MoveMORE,P06,P06_sess5,5,therapist,therapist cue.,2,,,,,
+P06_s5_03,MoveMORE,P06,P06_sess5,5,participant,P06 sess5 seg3: a participant utterance expressing avoidance.,8,1,0.87,1,llm_zero_shot,low
+P06_s5_03_t,MoveMORE,P06,P06_sess5,5,therapist,therapist cue.,2,,,,,
